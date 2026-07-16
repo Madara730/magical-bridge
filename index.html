@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Magical Localhost Bridge</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="controls" class="glass-panel">
+        <h1 class="gradient-text">✨ Magical Bridge</h1>
+        
+        <div class="input-group">
+          <input type="url" id="urlInput" placeholder="Enter tunnel URL (e.g. https://...)" autocomplete="off" />
+          <button id="goBtn">Go</button>
+        </div>
+
+        <div class="status-container">
+          <div class="status-indicator"></div>
+          <span id="statusText">Connecting...</span>
+        </div>
+
+        <div class="qr-section">
+          <p>Scan to sync this device:</p>
+          <div id="qrcode"></div>
+          <button id="copyLinkBtn" class="secondary-btn">Copy Sync Link</button>
+        </div>
+      </div>
+      
+      <div id="frame-container">
+        <iframe id="displayFrame" src="about:blank" frameborder="0"></iframe>
+      </div>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
