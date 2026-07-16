@@ -5,22 +5,104 @@ import QRCode from 'qrcode';
 // DOM Elements
 const urlInput = document.getElementById('urlInput');
 const goBtn = document.getElementById('goBtn');
+const bookmarkBtn = document.getElementById('bookmarkBtn');
 const displayFrame = document.getElementById('displayFrame');
 const statusText = document.getElementById('statusText');
 const statusIndicator = document.querySelector('.status-indicator');
 const qrcodeContainer = document.getElementById('qrcode');
 const copyLinkBtn = document.getElementById('copyLinkBtn');
+const historyList = document.getElementById('historyList');
+const bookmarksList = document.getElementById('bookmarksList');
 
+// State
 let peer = null;
-let connections = []; // Can be multiple if host
+let connections = []; 
 let isHost = false;
 let hostId = null;
+
+let history = JSON.parse(localStorage.getItem('bridge_history')) || [];
+let bookmarks = JSON.parse(localStorage.getItem('bridge_bookmarks')) || [];
 
 // Parse URL params
 const urlParams = new URLSearchParams(window.location.search);
 const connectTo = urlParams.get('room');
 
-// Initialize PeerJS
+// Initialize State UI
+renderHistory();
+renderBookmarks();
+
+function saveState() {
+  localStorage.setItem('bridge_history', JSON.stringify(history));
+  localStorage.setItem('bridge_bookmarks', JSON.stringify(bookmarks));
+  renderHistory();
+  renderBookmarks();
+}
+
+function addToHistory(url) {
+  if (!url) return;
+  // Remove if exists to push to top
+  history = history.filter(u => u !== url);
+  history.unshift(url);
+  if (history.length > 20) history.pop(); // Keep last 20
+  saveState();
+}
+
+function toggleBookmark(url) {
+  if (!url) return;
+  if (bookmarks.includes(url)) {
+    bookmarks = bookmarks.filter(u => u !== url);
+  } else {
+    bookmarks.push(url);
+  }
+  saveState();
+}
+
+// Render Lists
+function renderHistory() {
+  historyList.innerHTML = '';
+  history.forEach(url => {
+    const li = document.createElement('li');
+    li.textContent = url;
+    li.onclick = () => loadUrl(url, true);
+    historyList.appendChild(li);
+  });
+}
+
+function renderBookmarks() {
+  bookmarksList.innerHTML = '';
+  bookmarks.forEach(url => {
+    const li = document.createElement('li');
+    
+    const textSpan = document.createElement('span');
+    textSpan.textContent = url;
+    textSpan.style.flex = "1";
+    textSpan.style.overflow = "hidden";
+    textSpan.style.textOverflow = "ellipsis";
+    textSpan.onclick = () => loadUrl(url, true);
+    
+    const delBtn = document.createElement('button');
+    delBtn.className = 'delete-btn';
+    delBtn.textContent = '✖';
+    delBtn.onclick = (e) => {
+      e.stopPropagation();
+      toggleBookmark(url);
+      broadcastState();
+    };
+    
+    li.appendChild(textSpan);
+    li.appendChild(delBtn);
+    bookmarksList.appendChild(li);
+  });
+  
+  // Update bookmark button status based on current input
+  if (bookmarks.includes(urlInput.value)) {
+    bookmarkBtn.style.color = '#fbbf24'; // yellow
+  } else {
+    bookmarkBtn.style.color = 'white';
+  }
+}
+
+// PeerJS Logic
 function initPeer() {
   peer = new Peer();
 
@@ -28,19 +110,16 @@ function initPeer() {
     console.log('My peer ID is: ' + id);
     
     if (connectTo) {
-      // We are a guest connecting to a host
       isHost = false;
       hostId = connectTo;
       connectToHost(connectTo);
     } else {
-      // We are the host
       isHost = true;
       hostId = id;
       generateSyncQR(id);
-      updateStatus(`Waiting for devices... (ID: ${id.substring(0,4)}...)`, 'connected');
+      updateStatus(`Waiting... (Room: ${id.substring(0,4)})`, 'connected');
       
-      // Load last URL if available
-      const lastUrl = localStorage.getItem('lastUrl');
+      const lastUrl = history[0];
       if (lastUrl) {
         urlInput.value = lastUrl;
         updateIframe(lastUrl);
@@ -54,11 +133,14 @@ function initPeer() {
       connections.push(conn);
       updateStatus(`Connected to ${connections.length} device(s)`, 'connected');
       
-      // Send current URL to new connection
+      // Send FULL state to new connection
       conn.on('open', () => {
-        if (urlInput.value) {
-          conn.send({ type: 'url_update', url: urlInput.value });
-        }
+        conn.send({ 
+          type: 'full_sync', 
+          url: urlInput.value,
+          history: history,
+          bookmarks: bookmarks
+        });
       });
     }
   });
@@ -70,30 +152,42 @@ function initPeer() {
 }
 
 function connectToHost(hostId) {
-  updateStatus('Connecting to host...', '');
+  updateStatus('Connecting...', '');
   const conn = peer.connect(hostId);
   
   conn.on('open', () => {
     setupConnection(conn);
     connections = [conn];
     updateStatus('Connected to host', 'connected');
-    
-    // We don't send URL automatically, we just wait for host to sync
   });
 }
 
 function setupConnection(conn) {
   conn.on('data', (data) => {
-    console.log('Received:', data);
     if (data.type === 'url_update') {
-      urlInput.value = data.url;
-      updateIframe(data.url);
-      
-      // If we are host, broadcast to other connections
-      if (isHost) {
-        localStorage.setItem('lastUrl', data.url);
-        broadcastURL(data.url, conn.peer); // Send to all except sender
-      }
+      loadUrl(data.url, false); // false = don't broadcast back
+    } 
+    else if (data.type === 'full_sync') {
+      // Host sent us the authoritative state
+      history = data.history;
+      bookmarks = data.bookmarks;
+      saveState();
+      loadUrl(data.url, false);
+    }
+    else if (data.type === 'state_update') {
+      // Someone updated history/bookmarks
+      history = data.history;
+      bookmarks = data.bookmarks;
+      saveState();
+    }
+    
+    // If we are host, broadcast any received changes to ALL other guests
+    if (isHost && data.type !== 'full_sync') {
+      connections.forEach(c => {
+        if (c.peer !== conn.peer && c.open) {
+          c.send(data);
+        }
+      });
     }
   });
 
@@ -102,26 +196,46 @@ function setupConnection(conn) {
     if (isHost) {
       updateStatus(`Connected to ${connections.length} device(s)`, 'connected');
     } else {
-      updateStatus('Disconnected from host', 'error');
+      updateStatus('Disconnected', 'error');
     }
   });
 }
 
-function broadcastURL(url, excludePeerId = null) {
+function broadcastURL(url) {
+  const msg = { type: 'url_update', url };
   connections.forEach(conn => {
-    if (conn.peer !== excludePeerId && conn.open) {
-      conn.send({ type: 'url_update', url });
-    }
+    if (conn.open) conn.send(msg);
   });
 }
 
-function updateIframe(url) {
-  // Ensure protocol is present
-  if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
-    url = 'https://' + url;
-    urlInput.value = url;
+function broadcastState() {
+  const msg = { type: 'state_update', history, bookmarks };
+  connections.forEach(conn => {
+    if (conn.open) conn.send(msg);
+  });
+}
+
+function loadUrl(url, shouldBroadcast = true) {
+  if (!url) return;
+  
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    alert("⚠️ WARNING: You pasted a 'localhost' URL!\n\nYour phone cannot load this. Please use a tunnel URL instead.");
   }
-  displayFrame.src = url || 'about:blank';
+  
+  // Format URL
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+  
+  urlInput.value = url;
+  displayFrame.src = url;
+  addToHistory(url);
+  renderBookmarks(); // Update bookmark icon color
+  
+  if (shouldBroadcast) {
+    broadcastURL(url);
+    broadcastState(); // sync history changes
+  }
 }
 
 function updateStatus(text, stateClass) {
@@ -137,10 +251,7 @@ async function generateSyncQR(id) {
     await QRCode.toCanvas(syncUrl.toString(), {
       width: 150,
       margin: 1,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff'
-      }
+      color: { dark: '#0f172a', light: '#ffffff' }
     }, function (err, canvas) {
       if (err) throw err;
       qrcodeContainer.innerHTML = '';
@@ -159,25 +270,28 @@ async function generateSyncQR(id) {
 
 // Event Listeners
 goBtn.addEventListener('click', () => {
-  const url = urlInput.value;
-  if (!url) return;
-  
-  updateIframe(url);
-  broadcastURL(url);
-  
-  if (isHost) {
-    localStorage.setItem('lastUrl', url);
-  } else {
-    // Guest updates the host
-    if (connections.length > 0 && connections[0].open) {
-      connections[0].send({ type: 'url_update', url });
-    }
-  }
+  loadUrl(urlInput.value, true);
 });
 
 urlInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
-    goBtn.click();
+    loadUrl(urlInput.value, true);
+  }
+});
+
+bookmarkBtn.addEventListener('click', () => {
+  const url = urlInput.value;
+  if (!url) return;
+  toggleBookmark(url);
+  broadcastState();
+});
+
+urlInput.addEventListener('input', () => {
+  // Just update the bookmark star visually if typing matching URL
+  if (bookmarks.includes(urlInput.value)) {
+    bookmarkBtn.style.color = '#fbbf24';
+  } else {
+    bookmarkBtn.style.color = 'white';
   }
 });
 

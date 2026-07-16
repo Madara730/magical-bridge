@@ -4,16 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Magical Localhost Bridge</title>
+    <title>Magical Universal Bridge</title>
   </head>
   <body>
     <div id="app">
       <div id="controls" class="glass-panel">
-        <h1 class="gradient-text">✨ Magical Bridge</h1>
+        <h1 class="gradient-text">✨ Universal Bridge</h1>
         
         <div class="input-group">
-          <input type="url" id="urlInput" placeholder="Enter tunnel URL (e.g. https://...)" autocomplete="off" />
-          <button id="goBtn">Go</button>
+          <input type="url" id="urlInput" placeholder="Enter any URL or tunnel..." autocomplete="off" />
+          <div class="action-buttons">
+            <button id="goBtn" class="primary-btn">Go</button>
+            <button id="bookmarkBtn" class="icon-btn" title="Bookmark URL">⭐</button>
+          </div>
+          <small class="helper-text">Note: Use your tunnel URL for localhost apps!</small>
         </div>
 
         <div class="status-container">
@@ -21,8 +25,20 @@
           <span id="statusText">Connecting...</span>
         </div>
 
+        <div class="lists-container">
+          <div class="list-section">
+            <h3>Bookmarks</h3>
+            <ul id="bookmarksList" class="url-list"></ul>
+          </div>
+          
+          <div class="list-section">
+            <h3>History</h3>
+            <ul id="historyList" class="url-list"></ul>
+          </div>
+        </div>
+
         <div class="qr-section">
-          <p>Scan to sync this device:</p>
+          <p>Scan to sync and control from phone:</p>
           <div id="qrcode"></div>
           <button id="copyLinkBtn" class="secondary-btn">Copy Sync Link</button>
         </div>
