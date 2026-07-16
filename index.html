@@ -17,6 +17,7 @@
             <button id="goBtn" class="primary-btn">Go</button>
             <button id="bookmarkBtn" class="icon-btn" title="Bookmark URL">⭐</button>
           </div>
+          <button id="screenShareBtn" class="secondary-btn" style="background: #8b5cf6;">🖥️ Share Screen to Phone</button>
           <small class="helper-text">Note: Use your tunnel URL for localhost apps!</small>
         </div>
 
@@ -46,8 +47,14 @@
       
       <div id="frame-container">
         <iframe id="displayFrame" src="about:blank" frameborder="0"></iframe>
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div id="remoteControlOverlay">👆 Tap to control laptop screen</div>
       </div>
     </div>
+    
+    <!-- Container for visual remote clicks -->
+    <div id="clickContainer"></div>
+    
     <script type="module" src="/main.js"></script>
   </body>
 </html>

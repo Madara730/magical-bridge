@@ -6,7 +6,12 @@ import QRCode from 'qrcode';
 const urlInput = document.getElementById('urlInput');
 const goBtn = document.getElementById('goBtn');
 const bookmarkBtn = document.getElementById('bookmarkBtn');
+const screenShareBtn = document.getElementById('screenShareBtn');
 const displayFrame = document.getElementById('displayFrame');
+const remoteVideo = document.getElementById('remoteVideo');
+const remoteControlOverlay = document.getElementById('remoteControlOverlay');
+const clickContainer = document.getElementById('clickContainer');
+
 const statusText = document.getElementById('statusText');
 const statusIndicator = document.querySelector('.status-indicator');
 const qrcodeContainer = document.getElementById('qrcode');
@@ -19,6 +24,7 @@ let peer = null;
 let connections = []; 
 let isHost = false;
 let hostId = null;
+let localStream = null;
 
 let history = JSON.parse(localStorage.getItem('bridge_history')) || [];
 let bookmarks = JSON.parse(localStorage.getItem('bridge_bookmarks')) || [];
@@ -40,10 +46,9 @@ function saveState() {
 
 function addToHistory(url) {
   if (!url) return;
-  // Remove if exists to push to top
   history = history.filter(u => u !== url);
   history.unshift(url);
-  if (history.length > 20) history.pop(); // Keep last 20
+  if (history.length > 20) history.pop();
   saveState();
 }
 
@@ -57,7 +62,6 @@ function toggleBookmark(url) {
   saveState();
 }
 
-// Render Lists
 function renderHistory() {
   historyList.innerHTML = '';
   history.forEach(url => {
@@ -94,9 +98,8 @@ function renderBookmarks() {
     bookmarksList.appendChild(li);
   });
   
-  // Update bookmark button status based on current input
   if (bookmarks.includes(urlInput.value)) {
-    bookmarkBtn.style.color = '#fbbf24'; // yellow
+    bookmarkBtn.style.color = '#fbbf24';
   } else {
     bookmarkBtn.style.color = 'white';
   }
@@ -108,7 +111,6 @@ function initPeer() {
 
   peer.on('open', (id) => {
     console.log('My peer ID is: ' + id);
-    
     if (connectTo) {
       isHost = false;
       hostId = connectTo;
@@ -133,7 +135,6 @@ function initPeer() {
       connections.push(conn);
       updateStatus(`Connected to ${connections.length} device(s)`, 'connected');
       
-      // Send FULL state to new connection
       conn.on('open', () => {
         conn.send({ 
           type: 'full_sync', 
@@ -141,8 +142,26 @@ function initPeer() {
           history: history,
           bookmarks: bookmarks
         });
+        
+        // If sharing screen, send the video stream to the newly connected phone immediately
+        if (localStream) {
+          peer.call(conn.peer, localStream);
+        }
       });
     }
+  });
+  
+  // Answer incoming video calls (runs on phone)
+  peer.on('call', (call) => {
+    call.answer(); // Automatically answer
+    
+    call.on('stream', (remoteStream) => {
+      displayFrame.style.display = 'none';
+      remoteVideo.style.display = 'block';
+      remoteControlOverlay.style.display = 'block';
+      remoteVideo.srcObject = remoteStream;
+      updateStatus('Receiving Live Screen', 'connected');
+    });
   });
 
   peer.on('error', (err) => {
@@ -165,28 +184,26 @@ function connectToHost(hostId) {
 function setupConnection(conn) {
   conn.on('data', (data) => {
     if (data.type === 'url_update') {
-      loadUrl(data.url, false); // false = don't broadcast back
+      loadUrl(data.url, false);
     } 
     else if (data.type === 'full_sync') {
-      // Host sent us the authoritative state
       history = data.history;
       bookmarks = data.bookmarks;
       saveState();
       loadUrl(data.url, false);
     }
     else if (data.type === 'state_update') {
-      // Someone updated history/bookmarks
       history = data.history;
       bookmarks = data.bookmarks;
       saveState();
     }
+    else if (data.type === 'remote_tap' && isHost) {
+      simulateRemoteClick(data.x, data.y);
+    }
     
-    // If we are host, broadcast any received changes to ALL other guests
-    if (isHost && data.type !== 'full_sync') {
+    if (isHost && data.type !== 'full_sync' && data.type !== 'remote_tap') {
       connections.forEach(c => {
-        if (c.peer !== conn.peer && c.open) {
-          c.send(data);
-        }
+        if (c.peer !== conn.peer && c.open) c.send(data);
       });
     }
   });
@@ -201,6 +218,105 @@ function setupConnection(conn) {
   });
 }
 
+// Remote Click Handling
+function simulateRemoteClick(xPercent, yPercent) {
+  // Translate percentage back to exact pixel coordinates
+  const targetX = window.innerWidth * xPercent;
+  const targetY = window.innerHeight * yPercent;
+  
+  // 1. Visual Feedback: Render a pink ripple where the phone tapped
+  const ripple = document.createElement('div');
+  ripple.className = 'remote-click-ripple';
+  ripple.style.left = `${targetX}px`;
+  ripple.style.top = `${targetY}px`;
+  clickContainer.appendChild(ripple);
+  
+  setTimeout(() => ripple.remove(), 500);
+  
+  // 2. DOM Click: Attempt to click the element natively
+  // Note: This only works if the shared screen is EXACTLY the browser tab boundaries
+  const element = document.elementFromPoint(targetX, targetY);
+  if (element) {
+    if (element.tagName === 'IFRAME') {
+      console.warn("Browser security prevents clicking inside cross-origin iframes.");
+    } else {
+      element.click();
+      if(element.focus) element.focus();
+    }
+  }
+}
+
+// Screen Sharing
+screenShareBtn.addEventListener('click', async () => {
+  try {
+    localStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: "always" },
+      audio: false
+    });
+    
+    // Send stream to all existing connected phones
+    connections.forEach(conn => {
+      if (conn.open) peer.call(conn.peer, localStream);
+    });
+    
+    screenShareBtn.textContent = '🟢 Sharing Screen Live';
+    screenShareBtn.style.background = '#10b981';
+    
+    localStream.getVideoTracks()[0].onended = () => {
+      localStream = null;
+      screenShareBtn.textContent = '🖥️ Share Screen to Phone';
+      screenShareBtn.style.background = '#8b5cf6';
+    };
+  } catch (err) {
+    console.error("Screen share error: ", err);
+    alert("Screen share cancelled or failed.");
+  }
+});
+
+// Capture tap on phone video
+remoteVideo.addEventListener('click', (e) => {
+  const rect = remoteVideo.getBoundingClientRect();
+  const videoRatio = remoteVideo.videoWidth / remoteVideo.videoHeight;
+  const elementRatio = rect.width / rect.height;
+  
+  let drawWidth = rect.width;
+  let drawHeight = rect.height;
+  let offsetX = 0;
+  let offsetY = 0;
+  
+  // Handle object-fit: contain math to map exactly to the video pixels
+  if (videoRatio > elementRatio) {
+    drawHeight = rect.width / videoRatio;
+    offsetY = (rect.height - drawHeight) / 2;
+  } else {
+    drawWidth = rect.height * videoRatio;
+    offsetX = (rect.width - drawWidth) / 2;
+  }
+  
+  const clickX = e.clientX - rect.left - offsetX;
+  const clickY = e.clientY - rect.top - offsetY;
+  
+  if (clickX < 0 || clickX > drawWidth || clickY < 0 || clickY > drawHeight) {
+    return; // Ignore clicks on the black letterboxing
+  }
+  
+  const xPercent = clickX / drawWidth;
+  const yPercent = clickY / drawHeight;
+  
+  if (connections.length > 0 && connections[0].open) {
+    connections[0].send({ type: 'remote_tap', x: xPercent, y: yPercent });
+    
+    // Add local visual ripple on phone
+    const ripple = document.createElement('div');
+    ripple.className = 'remote-click-ripple';
+    ripple.style.left = `${e.clientX}px`;
+    ripple.style.top = `${e.clientY}px`;
+    document.body.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 500);
+  }
+});
+
+// Core Functions
 function broadcastURL(url) {
   const msg = { type: 'url_update', url };
   connections.forEach(conn => {
@@ -219,23 +335,33 @@ function loadUrl(url, shouldBroadcast = true) {
   if (!url) return;
   
   if (url.includes('localhost') || url.includes('127.0.0.1')) {
-    alert("⚠️ WARNING: You pasted a 'localhost' URL!\n\nYour phone cannot load this. Please use a tunnel URL instead.");
+    alert("⚠️ WARNING: You pasted a 'localhost' URL!\n\nYour phone cannot load this via URL. Use the 'Share Screen' button instead!");
   }
   
-  // Format URL
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     url = 'https://' + url;
   }
   
   urlInput.value = url;
+  displayFrame.style.display = 'block';
+  remoteVideo.style.display = 'none';
+  remoteControlOverlay.style.display = 'none';
   displayFrame.src = url;
+  
   addToHistory(url);
-  renderBookmarks(); // Update bookmark icon color
+  renderBookmarks();
   
   if (shouldBroadcast) {
     broadcastURL(url);
-    broadcastState(); // sync history changes
+    broadcastState();
   }
+}
+
+function updateIframe(url) {
+  displayFrame.style.display = 'block';
+  remoteVideo.style.display = 'none';
+  remoteControlOverlay.style.display = 'none';
+  displayFrame.src = url || 'about:blank';
 }
 
 function updateStatus(text, stateClass) {
@@ -249,9 +375,7 @@ async function generateSyncQR(id) {
   
   try {
     await QRCode.toCanvas(syncUrl.toString(), {
-      width: 150,
-      margin: 1,
-      color: { dark: '#0f172a', light: '#ffffff' }
+      width: 150, margin: 1, color: { dark: '#0f172a', light: '#ffffff' }
     }, function (err, canvas) {
       if (err) throw err;
       qrcodeContainer.innerHTML = '';
@@ -268,31 +392,18 @@ async function generateSyncQR(id) {
   }
 }
 
-// Event Listeners
-goBtn.addEventListener('click', () => {
-  loadUrl(urlInput.value, true);
-});
-
+// UI Event Listeners
+goBtn.addEventListener('click', () => loadUrl(urlInput.value, true));
 urlInput.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') {
-    loadUrl(urlInput.value, true);
-  }
+  if (e.key === 'Enter') loadUrl(urlInput.value, true);
 });
-
 bookmarkBtn.addEventListener('click', () => {
-  const url = urlInput.value;
-  if (!url) return;
-  toggleBookmark(url);
+  if (!urlInput.value) return;
+  toggleBookmark(urlInput.value);
   broadcastState();
 });
-
 urlInput.addEventListener('input', () => {
-  // Just update the bookmark star visually if typing matching URL
-  if (bookmarks.includes(urlInput.value)) {
-    bookmarkBtn.style.color = '#fbbf24';
-  } else {
-    bookmarkBtn.style.color = 'white';
-  }
+  bookmarkBtn.style.color = bookmarks.includes(urlInput.value) ? '#fbbf24' : 'white';
 });
 
 // Initialize app
