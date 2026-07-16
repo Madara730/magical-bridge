@@ -2,10 +2,10 @@ import './style.css';
 import Peer from 'peerjs';
 
 // ============================================================
-// 🚀 SCREEN SHARE + REMOTE CONTROL ENGINE
+// 🚀 SCREEN SHARE + REMOTE CONTROL - FIXED VERSION
 // ============================================================
 
-// --- DOM ---
+// --- DOM Elements ---
 const shareBtn = document.getElementById('shareBtn');
 const stopBtn = document.getElementById('stopBtn');
 const controlBtn = document.getElementById('controlBtn');
@@ -29,8 +29,9 @@ let isSharing = false;
 let isControlEnabled = false;
 let roomId = '';
 let isPhone = false;
+let phoneCalls = [];
 
-// --- Detect if device is phone ---
+// --- Detect device ---
 if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
     isPhone = true;
     document.querySelector('.header h1').textContent = '📱 Viewer + Controller';
@@ -39,21 +40,16 @@ if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
 // --- Initialize Peer ---
 async function initPeer() {
     try {
-        // Check if URL has room ID
         const params = new URLSearchParams(window.location.search);
         const existingRoom = params.get('room');
 
         if (existingRoom) {
-            // Phone mode - join existing room
             roomId = existingRoom;
             await connectToRoom(roomId);
-            return;
+        } else {
+            roomId = 'screen-' + Math.random().toString(36).substring(2, 10);
+            await createRoom(roomId);
         }
-
-        // Laptop mode - create new room
-        roomId = 'screen-' + Math.random().toString(36).substring(2, 10);
-        await createRoom(roomId);
-
     } catch (error) {
         console.error('Peer init error:', error);
         statusText.innerHTML = '<span class="disconnected">● Error: ' + error.message + '</span>';
@@ -81,14 +77,23 @@ function createRoom(id) {
         });
 
         peer.on('connection', (conn) => {
-            console.log('📱 Phone connected!');
+            console.log('📱 Phone connected via data channel');
             connections.push(conn);
-            setupConnection(conn);
+            setupDataConnection(conn);
             updateDeviceCount();
+        });
 
-            // Send screen stream if sharing
+        peer.on('call', (call) => {
+            console.log('📞 Phone calling for video stream');
+            phoneCalls.push(call);
+            
+            // If we're sharing, answer the call with the stream
             if (isSharing && screenStream) {
-                sendScreenStream(conn);
+                call.answer(screenStream);
+                console.log('✅ Answered call with screen stream');
+            } else {
+                // Store call for later
+                console.log('⏳ No stream yet, will answer when sharing starts');
             }
         });
 
@@ -114,10 +119,12 @@ function connectToRoom(id) {
 
         peer.on('open', () => {
             console.log('✅ Phone peer ready, connecting to:', id);
+            
+            // Create data connection first
             const conn = peer.connect(id);
             conn.on('open', () => {
                 connections.push(conn);
-                setupConnection(conn);
+                setupDataConnection(conn);
                 updateUI('phone');
                 updateDeviceCount();
                 resolve();
@@ -131,8 +138,8 @@ function connectToRoom(id) {
     });
 }
 
-// --- Setup Connection ---
-function setupConnection(conn) {
+// --- Setup Data Connection ---
+function setupDataConnection(conn) {
     conn.on('data', (data) => {
         handleData(data, conn);
     });
@@ -147,26 +154,27 @@ function setupConnection(conn) {
 // --- Handle Data ---
 function handleData(data, conn) {
     if (data.type === 'tap') {
-        // Phone tapped - simulate click on laptop
         if (isControlEnabled && !isPhone) {
             simulateClick(data.x, data.y);
         }
     }
 
-    if (data.type === 'screen-stream') {
-        // Receiving screen stream from laptop
-        if (isPhone) {
-            const video = document.getElementById('screenVideo');
-            video.srcObject = data.stream;
-            video.style.display = 'block';
-            placeholder.style.display = 'none';
-            remoteOverlay.classList.add('active');
-            document.querySelector('.tap-hint').textContent = '👆 Tap anywhere to control laptop';
+    if (data.type === 'request-stream') {
+        // Phone is requesting the screen stream
+        if (isSharing && screenStream) {
+            console.log('📤 Sending stream to phone');
+            // Call the phone's peer ID directly
+            const call = peer.call(conn.peer, screenStream);
+            call.on('stream', (remoteStream) => {
+                console.log('✅ Stream sent successfully');
+            });
+            call.on('error', (err) => {
+                console.error('❌ Call error:', err);
+            });
         }
     }
 
     if (data.type === 'cursor-position') {
-        // Show cursor on phone
         if (isPhone) {
             cursorDot.style.left = data.x + '%';
             cursorDot.style.top = data.y + '%';
@@ -175,42 +183,23 @@ function handleData(data, conn) {
     }
 }
 
-// --- Send Screen Stream ---
-function sendScreenStream(conn) {
-    // We can't send MediaStream directly over PeerJS data channel
-    // Instead, we tell the phone to request it via WebRTC
-    conn.send({
-        type: 'request-stream'
-    });
-}
-
-// Phone side answering logic for the media call
-peer?.on('call', (call) => {
-    call.answer();
-    call.on('stream', (remoteStream) => {
-        if (isPhone) {
-            const video = document.getElementById('screenVideo');
-            video.srcObject = remoteStream;
-            video.style.display = 'block';
-            placeholder.style.display = 'none';
-            remoteOverlay.classList.add('active');
-            document.querySelector('.tap-hint').textContent = '👆 Tap anywhere to control laptop';
-        }
-    });
-});
-
-// Fix: Add logic to actually call the phone when screenStream is ready
+// --- Screen Sharing ---
 async function startScreenShare() {
     try {
+        console.log('🎥 Starting screen capture...');
         screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: {
                 displaySurface: 'monitor',
-                cursor: 'always'
+                cursor: 'always',
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
             },
             audio: false
         });
 
-        // Show video locally on host
+        console.log('✅ Screen captured');
+
+        // Show video on laptop
         screenVideo.srcObject = screenStream;
         screenVideo.style.display = 'block';
         placeholder.style.display = 'none';
@@ -219,12 +208,21 @@ async function startScreenShare() {
         shareBtn.textContent = '🟢 Sharing...';
         shareBtn.classList.add('active');
         stopBtn.style.display = 'inline-block';
-        updateUI('host');
+        statusText.innerHTML = '<span class="connected">● Screen sharing active</span>';
 
-        // Broadcast to connected devices via PeerJS media call
+        // Send stream to all connected phones
         connections.forEach(conn => {
-            if (conn.open) {
-                peer.call(conn.peer, screenStream);
+            console.log('📤 Sending stream to:', conn.peer);
+            try {
+                const call = peer.call(conn.peer, screenStream);
+                call.on('stream', (remoteStream) => {
+                    console.log('✅ Stream received by phone');
+                });
+                call.on('error', (err) => {
+                    console.error('❌ Call error:', err);
+                });
+            } catch (err) {
+                console.error('❌ Failed to call peer:', err);
             }
         });
 
@@ -233,61 +231,24 @@ async function startScreenShare() {
             stopScreenShare();
         };
 
-        statusText.innerHTML = '<span class="connected">● Screen sharing active</span>';
+        // Also handle any pending calls
+        phoneCalls.forEach(call => {
+            try {
+                call.answer(screenStream);
+                console.log('✅ Answered pending call');
+            } catch (err) {
+                console.error('❌ Failed to answer pending call:', err);
+            }
+        });
+        phoneCalls = [];
 
     } catch (error) {
-        console.error('Screen share error:', error);
+        console.error('❌ Screen share error:', error);
         alert('Failed to share screen. Please grant permission.');
     }
 }
 
-
-// --- Simulate Click ---
-function simulateClick(x, y) {
-    // Calculate screen coordinates
-    const viewer = document.getElementById('viewer');
-    const rect = viewer.getBoundingClientRect();
-    const clickX = (x / 100) * window.screen.width;
-    const clickY = (y / 100) * window.screen.height;
-
-    console.log(`🖱️ Simulating click at (${clickX}, ${clickY})`);
-
-    // Create and dispatch click event
-    const event = new MouseEvent('click', {
-        clientX: (x / 100) * window.innerWidth,
-        clientY: (y / 100) * window.innerHeight,
-        bubbles: true,
-        cancelable: true
-    });
-
-    // Send cursor position to phone
-    connections.forEach(conn => {
-        if(conn.open) {
-            conn.send({
-                type: 'cursor-position',
-                x: x,
-                y: y
-            });
-        }
-    });
-
-    // Simulate click on the viewer
-    document.getElementById('viewer').dispatchEvent(event);
-
-    // Attempt to click the actual DOM element (works if sharing current tab)
-    const element = document.elementFromPoint((x / 100) * window.innerWidth, (y / 100) * window.innerHeight);
-    if(element && element !== document.getElementById('remoteOverlay')) {
-        element.click();
-    }
-
-    // Show feedback
-    const dot = document.getElementById('cursorDot');
-    dot.style.left = x + '%';
-    dot.style.top = y + '%';
-    dot.classList.add('show');
-    setTimeout(() => dot.classList.remove('show'), 500);
-}
-
+// --- Stop Screen Sharing ---
 function stopScreenShare() {
     if (screenStream) {
         screenStream.getTracks().forEach(track => track.stop());
@@ -301,6 +262,50 @@ function stopScreenShare() {
     shareBtn.classList.remove('active');
     stopBtn.style.display = 'none';
     statusText.innerHTML = '<span class="disconnected">● Not sharing</span>';
+    console.log('⏹️ Screen sharing stopped');
+}
+
+// --- Simulate Click ---
+function simulateClick(x, y) {
+    const viewer = document.getElementById('viewer');
+    const rect = viewer.getBoundingClientRect();
+    
+    // Calculate actual pixel position
+    const clickX = rect.left + (x / 100) * rect.width;
+    const clickY = rect.top + (y / 100) * rect.height;
+
+    console.log(`🖱️ Simulating click at (${clickX}, ${clickY})`);
+
+    // Create click event
+    const clickEvent = new MouseEvent('click', {
+        clientX: clickX,
+        clientY: clickY,
+        bubbles: true,
+        cancelable: true
+    });
+
+    // Send cursor position to phone
+    connections.forEach(conn => {
+        conn.send({
+            type: 'cursor-position',
+            x: x,
+            y: y
+        });
+    });
+
+    // Simulate click
+    const target = document.elementFromPoint(clickX, clickY);
+    if (target) {
+        target.dispatchEvent(clickEvent);
+        console.log('✅ Click simulated on:', target.tagName);
+    }
+
+    // Show feedback
+    const dot = document.getElementById('cursorDot');
+    dot.style.left = x + '%';
+    dot.style.top = y + '%';
+    dot.classList.add('show');
+    setTimeout(() => dot.classList.remove('show'), 500);
 }
 
 // --- Generate QR ---
@@ -323,8 +328,6 @@ function updateUI(role) {
         statusBadge.textContent = '● Viewer';
         statusBadge.className = 'status-badge active';
         statusText.innerHTML = '<span class="connected">● Connected to laptop</span>';
-        document.querySelector('.controls').style.display = 'none';
-        document.querySelector('.qr-section').style.display = 'none';
     }
 }
 
@@ -335,7 +338,6 @@ function updateDeviceCount() {
 
 // --- Event Listeners ---
 shareBtn.addEventListener('click', startScreenShare);
-
 stopBtn.addEventListener('click', stopScreenShare);
 
 controlBtn.addEventListener('click', () => {
@@ -345,32 +347,33 @@ controlBtn.addEventListener('click', () => {
     if (isControlEnabled) {
         remoteOverlay.classList.add('active');
         remoteOverlay.querySelector('.tap-hint').textContent = '👆 Tap anywhere to control laptop';
+        // Auto-send control status to phone
+        connections.forEach(conn => {
+            conn.send({ type: 'control-enabled', enabled: true });
+        });
     } else {
         remoteOverlay.classList.remove('active');
+        connections.forEach(conn => {
+            conn.send({ type: 'control-enabled', enabled: false });
+        });
     }
 });
 
-// --- Phone Tap to Control ---
+// --- Phone: Tap to Control ---
 if (isPhone) {
-    document.getElementById('remoteOverlay').addEventListener('click', (e) => {
-        if (!isControlEnabled) return;
-
+    document.getElementById('viewer').addEventListener('click', (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         const x = ((e.clientX - rect.left) / rect.width) * 100;
         const y = ((e.clientY - rect.top) / rect.height) * 100;
 
-        // Send tap to laptop
         connections.forEach(conn => {
-            if(conn.open) {
-                conn.send({
-                    type: 'tap',
-                    x: x,
-                    y: y
-                });
-            }
+            conn.send({
+                type: 'tap',
+                x: x,
+                y: y
+            });
         });
 
-        // Show tap feedback locally on phone
         const dot = document.getElementById('cursorDot');
         dot.style.left = x + '%';
         dot.style.top = y + '%';
@@ -378,24 +381,41 @@ if (isPhone) {
         setTimeout(() => dot.classList.remove('show'), 300);
     });
 
-    // Auto-enable control on phone
-    setTimeout(() => {
-        controlBtn.click();
-    }, 1000);
+    // Listen for incoming video call
+    // FIX: Must define peer first, but this block is inside if(isPhone), so wait for initPeer
+    // The correct place for peer.on('call') is inside connectToRoom or initPeer, but this is 
+    // fine if we ensure it runs after peer is initialized.
+    
+    // In their code, they attached peer.on('call') dynamically, but peer is null here when script starts!
 }
 
 // --- Start ---
-initPeer();
+initPeer().then(() => {
+    if (isPhone && peer) {
+        peer.on('call', (call) => {
+            console.log('📞 Receiving screen stream...');
+            call.answer(); // Answer without stream
+            call.on('stream', (stream) => {
+                console.log('✅ Receiving screen stream');
+                screenVideo.srcObject = stream;
+                screenVideo.style.display = 'block';
+                placeholder.style.display = 'none';
+                remoteOverlay.classList.add('active');
+                statusText.innerHTML = '<span class="connected">● Receiving screen</span>';
+            });
+            call.on('error', (err) => {
+                console.error('❌ Call error:', err);
+            });
+        });
+    }
+});
 
 // --- Console Help ---
-console.log('📺 Screen Share + Control Engine');
+console.log('📺 Screen Share + Control Engine (FIXED)');
 console.log('📡 Room ID:', roomId);
 console.log('📱 Phone mode:', isPhone);
 console.log('💡 Share screen to let phone see and control your laptop');
-
-// --- Keyboard shortcuts ---
-document.addEventListener('keydown', (e) => {
-    if (e.key === 's' && !isSharing) shareBtn.click();
-    if (e.key === 's' && isSharing) stopBtn.click();
-    if (e.key === 'c') controlBtn.click();
-});
+console.log("🔧 If screen doesn't appear, check:");
+console.log('  1. Both devices on same network?');
+console.log('  2. Firewall allowing WebRTC?');
+console.log('  3. Try using Chrome browser');
