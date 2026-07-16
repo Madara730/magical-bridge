@@ -1,60 +1,55 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Magical Universal Bridge</title>
-  </head>
-  <body>
-    <div id="app">
-      <div id="controls" class="glass-panel">
-        <h1 class="gradient-text">✨ Universal Bridge</h1>
-        
-        <div class="input-group">
-          <input type="url" id="urlInput" placeholder="Enter any URL or tunnel..." autocomplete="off" />
-          <div class="action-buttons">
-            <button id="goBtn" class="primary-btn">Go</button>
-            <button id="bookmarkBtn" class="icon-btn" title="Bookmark URL">⭐</button>
-          </div>
-          <button id="screenShareBtn" class="secondary-btn" style="background: #8b5cf6;">🖥️ Share Screen to Phone</button>
-          <small class="helper-text">Note: Use your tunnel URL for localhost apps!</small>
-        </div>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <title>📺 Screen Share + Control</title>
+</head>
+<body>
 
-        <div class="status-container">
-          <div class="status-indicator"></div>
-          <span id="statusText">Connecting...</span>
-        </div>
-
-        <div class="lists-container">
-          <div class="list-section">
-            <h3>Bookmarks</h3>
-            <ul id="bookmarksList" class="url-list"></ul>
-          </div>
-          
-          <div class="list-section">
-            <h3>History</h3>
-            <ul id="historyList" class="url-list"></ul>
-          </div>
-        </div>
-
-        <div class="qr-section">
-          <p>Scan to sync and control from phone:</p>
-          <div id="qrcode"></div>
-          <button id="copyLinkBtn" class="secondary-btn">Copy Sync Link</button>
-        </div>
-      </div>
-      
-      <div id="frame-container">
-        <iframe id="displayFrame" src="about:blank" frameborder="0"></iframe>
-        <video id="remoteVideo" autoplay playsinline></video>
-        <div id="remoteControlOverlay">👆 Tap to control laptop screen</div>
-      </div>
+    <!-- HEADER -->
+    <div class="header">
+        <h1>📺 Screen Share + Control</h1>
+        <span class="status-badge" id="statusBadge">● Disconnected</span>
     </div>
-    
-    <!-- Container for visual remote clicks -->
-    <div id="clickContainer"></div>
-    
+
+    <!-- CONTROLS -->
+    <div class="controls">
+        <button class="btn-share" id="shareBtn">🖥️ Share Screen</button>
+        <button class="btn-stop" id="stopBtn" style="display:none;">⏹️ Stop</button>
+        <button class="btn-control" id="controlBtn">👆 Enable Phone Control</button>
+        <span class="info" id="roomInfo">📡 Not connected</span>
+    </div>
+
+    <!-- VIEWER -->
+    <div class="viewer" id="viewer">
+        <div class="placeholder" id="placeholder">
+            <div class="icon">📺</div>
+            <p>Click "Share Screen" to start</p>
+            <p class="sub">Your phone will see your laptop screen</p>
+        </div>
+        <video id="screenVideo" autoplay playsinline style="display:none;"></video>
+        <div class="remote-overlay" id="remoteOverlay">
+            <div class="tap-hint">👆 Tap anywhere to control laptop</div>
+        </div>
+        <div class="cursor-dot" id="cursorDot"></div>
+    </div>
+
+    <!-- QR SECTION -->
+    <div class="qr-section" id="qrSection">
+        <img id="qrImage" src="" alt="QR Code" />
+        <div class="room-id" id="roomIdDisplay">Room ID: Loading...</div>
+        <div class="hint">📱 Scan with phone to connect</div>
+    </div>
+
+    <!-- BOTTOM INFO -->
+    <div class="bottom-info">
+        <div class="status-text" id="statusText">
+            <span class="disconnected">● Not connected</span>
+        </div>
+        <div class="device-count" id="deviceCount">0 devices connected</div>
+    </div>
+
     <script type="module" src="/main.js"></script>
-  </body>
+</body>
 </html>
